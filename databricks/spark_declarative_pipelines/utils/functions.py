@@ -3,6 +3,7 @@ from pyspark.sql.functions import *
 from pyspark.sql.types import StructType, StructField, IntegerType, FloatType, DoubleType, StringType, BooleanType, TimestampType, MapType
 from logger.logger import *
 from pyspark.sql import types as ty
+from pyspark.sql import functions as fa
 
 import json
 import types
