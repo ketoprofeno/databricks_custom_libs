@@ -2,9 +2,9 @@ from pyspark.sql import DataFrame
 from pyspark.sql.functions import *
 from pyspark.sql.types import StructType, StructField, IntegerType, FloatType, DoubleType, StringType, BooleanType, TimestampType, MapType
 from logger.logger import *
+from pyspark.sql import types as ty
 
 import json
-import dlt
 import types
 
 def set_utc_ingestion_date(landing_data):
@@ -80,20 +80,20 @@ def merge_two_dicts(x: dict, y: dict) -> dict:
 
 def get_expectations(expectations_repo_source, expectations_repo_division, table_config, expect_type):    
   rules_source = get_rules(expectations_repo_source, table_config, 'source', expect_type)
-  rules_division = get_rules(expectations_repo_division, table_config, 'division', expect_type)
+  rules_division = get_rules(expectations_repo_division, table_config, 'faena', expect_type)
     
   return merge_two_dicts(rules_source, rules_division)
 
 def get_rules(path_repo_json, table_config, expect_hierarchy_level, expect_type, path_config_expectations=None):
-  division = table_config['division']
+  faena = table_config['faena']
   data_source = table_config['data_source']
   stage = table_config['output']['stage']
   rules = {}
 
   if expect_hierarchy_level == 'source' and not path_config_expectations:
-    json_file = open(f'{path_repo_json}/{data_source}/{stage}/expectations/config-dlt-expectations-{stage}-{data_source}.json')
-  elif expect_hierarchy_level == 'division' and not path_config_expectations:
-    json_file = open(f'{path_repo_json}/{data_source}/{stage}/expectations/config-dlt-expectations-{stage}-{data_source}-{division}.json')
+    json_file = open(f'{path_repo_json}/{data_source}/{stage}/expectations/config-sdp-expectations-{stage}-{data_source}.json')
+  elif expect_hierarchy_level == 'faena' and not path_config_expectations:
+    json_file = open(f'{path_repo_json}/{data_source}/{stage}/expectations/config-sdp-expectations-{stage}-{data_source}-{faena}.json')
   elif path_config_expectations:
     json_file = open(f'{path_repo_json}/{path_config_expectations}')
 
@@ -290,33 +290,6 @@ def get_bad_records_path(config: dict, environment: str) -> str:
           f"{config['data_source']}/bad_records/" \
           f"{config['topic']}")
 
-def create_data_quality_table(config, expect_all):
-  """
-  Crea una tabla temporal en DLT que aplica reglas de calidad definidas en `expect_all`.
-
-  Args:
-      config (dict): Configuración de la tabla, incluyendo el nombre del tópico y el stage.
-      expect_all (dict): Diccionario con reglas de calidad para evaluar los datos.
-
-  Returns:
-      None: La función registra una tabla temporal DLT.
-  """  
-
-  @dlt.table(
-      name = f"{config['topic']}_{config['input']['stage']}_quality_table",
-      temporary=True
-  )
-
-  @dlt.expect_all(expect_all)
-
-  def data_quality():
-    map_expr = []
-    for rule_name, rule_condition in expect_all.items():
-          map_expr.extend([lit(rule_name), expr(rule_condition)])
-
-    return dlt.readStream(config['topic'] + '_' + config['input']['stage']) \
-        .withColumn("pass_quality", create_map(*map_expr))  
-
 def exec_custom_functions(module_ref: types.ModuleType, data: dict, config: dict, parent_function:str = 'parent_function') -> DataFrame:
   """
   Función para ejecutar las funciones personalizadas.
@@ -354,3 +327,63 @@ def rename_columns(dataframe: DataFrame, mapping_dict: dict) -> DataFrame:
         dataframe = dataframe.withColumnRenamed(old_name, new_name)
     
     return dataframe
+  
+
+def get_volume_stage_path(config, environment):
+    """
+    Función para retornar la ruta del volumen en Unity Catalog donde se encuentran los datos en etapa stage.
+
+    Args:
+        config (dict): Diccionario con las configuraciones del JSON.
+        environment (str): Ambiente de Databricks a utilizar (ej: 'dev', 'preprod', 'prod').
+
+    Returns:
+        str: Ruta completa al volumen stage correspondiente al tópico indicado.
+    """
+    catalog = f"{environment}_{config['input']['uc_catalog']}"
+    schema = config['input']['uc_schema']
+    volume_name = config['input']['uc_volume']
+    topic = config['topic']
+
+    return f"/Volumes/{catalog}/{schema}/{volume_name}/{topic}"
+  
+  ## Silver functions
+
+def convert_timestamp_local_tz(landing_data, column_list):
+    for column_name in column_list:
+      landing_data = landing_data.withColumn(column_name + '_cl',  from_utc_timestamp(col(column_name) ,'America/Santiago'))
+
+    return landing_data
+
+def clean_columns(landing_data):
+    for colname in landing_data.columns:        
+      new_colname = colname.lower().replace(' ', '_').strip()
+      landing_data = landing_data.withColumnRenamed(colname, new_colname)
+
+    return landing_data
+ 
+def cast_columns(
+    df: DataFrame,
+    schema: ty.StructType,
+    timestamp_format: str | None = None,
+) -> DataFrame:
+    for field in schema.fields:
+        if field.name not in df.columns:
+            continue
+
+        column = fa.col(field.name)
+        target_type = field.dataType
+        current_type = df.schema[field.name].dataType
+
+        if current_type == target_type:
+            continue
+
+        if isinstance(target_type, ty.TimestampType):
+            column = fa.regexp_replace(column, '"', "")
+            column = fa.to_timestamp(column, timestamp_format)
+        else:
+            column = column.cast(target_type)
+
+        df = df.withColumn(field.name, column)
+
+    return df
