@@ -16,34 +16,129 @@ def set_date_from_config(df, partition_date, column_name = 'date'):
     return df.withColumn(column_name, to_date(substring(partition_date, 0, 10)))
   else:
     return df
+  
+###### TEST ########
+def get_schema(
+    schema_dict: list[dict],
+    include_metadata: bool = False
+) -> str:
+    """
+    Construye un esquema en formato DDL a partir de una lista de columnas.
 
-def get_schema(schema_dict: dict) -> str:
-  """
-  Función para retornar el esquema en formato string en base de un diccionario.
+    Args:
+        schema_dict:
+            Lista de diccionarios con la definición de columnas.
 
-  Args:
-    schema_dict (dict): Esquema del dataframe en formato de diccionario.
+        include_metadata:
+            Cuando es True, incorpora metadata válida para la definición
+            de tablas SDP, como COMMENT y MASK.
 
-  Returns:
-      str: Retorna el esquema en formato string.
-  """
-  schema_string = ''
-  for index, item in enumerate(schema_dict):
+            Cuando es False, genera un esquema compatible con
+            DataFrameReader.schema().
+
+    Returns:
+        Esquema en formato DDL.
+    """
+
+    columns = []
+
+    for item in schema_dict:
+        column_name = quote_identifier(item["name"])
+        column_type = normalize_data_type(item["type"])
+
+        definition = f"{column_name} {column_type}"
+
+        generated_col = item.get("generated_col", "").strip()
+        if generated_col:
+            definition += (
+                f" GENERATED ALWAYS AS ({generated_col})"
+            )
+
+        if item.get("is_nullable") is False:
+            definition += " NOT NULL"
+
+        if include_metadata:
+            comment = item.get("comment", "").strip()
+            if comment:
+                definition += (
+                    f" COMMENT '{escape_sql_string(comment)}'"
+                )
+
+            column_mask = item.get("column_mask", "").strip()
+            if column_mask:
+                definition += f" MASK {column_mask}"
+
+        columns.append(definition)
+
+    return ",\n".join(columns)
+
+
+def normalize_data_type(data_type: str) -> str:
+    """
+    Normaliza tipos definidos en la configuración.
+
+    Mantiene la compatibilidad con el formato MAP utilizado actualmente,
+    donde los componentes pueden venir separados por guion bajo.
+    """
+
+    normalized_type = data_type.upper().strip()
+
+    if normalized_type.startswith("MAP"):
+        normalized_type = (
+            normalized_type
+            .replace("_", ",")
+            .replace(" ", "")
+        )
+
+    return normalized_type
+
+
+def escape_sql_string(value: str) -> str:
+    """
+    Escapa comillas simples para literales SQL.
+    """
+
+    return value.replace("'", "''")
+
+
+def quote_identifier(identifier: str) -> str:
+    """
+    Protege nombres de columnas con caracteres especiales o palabras
+    reservadas.
+    """
+
+    escaped_identifier = identifier.replace("`", "``")
+    return f"`{escaped_identifier}`"
+  
+##### END TEST #######
+
+# def get_schema(schema_dict: dict) -> str:
+#   """
+#   Función para retornar el esquema en formato string en base de un diccionario.
+
+#   Args:
+#     schema_dict (dict): Esquema del dataframe en formato de diccionario.
+
+#   Returns:
+#       str: Retorna el esquema en formato string.
+#   """
+#   schema_string = ''
+#   for index, item in enumerate(schema_dict):
     
-    if item['type'].upper().startswith('MAP'):
-      schema_string += f"{item['name']} {item['type'].upper().replace('_', ',').replace(' ', '')}"
+#     if item['type'].upper().startswith('MAP'):
+#       schema_string += f"{item['name']} {item['type'].upper().replace('_', ',').replace(' ', '')}"
 
-    else:
-      schema_string += f"{item['name']} {item['type'].upper()}"
+#     else:
+#       schema_string += f"{item['name']} {item['type'].upper()}"
 
-    if 'generated_col' in item and len(item['generated_col']) > 0:
-      schema_string += f" GENERATED ALWAYS AS ({item['generated_col']})"
-    if 'is_nullable' in item and not item['is_nullable']:
-      schema_string += " NOT NULL"
-    if index < len(schema_dict) - 1:
-      schema_string += ', '
+#     if 'generated_col' in item and len(item['generated_col']) > 0:
+#       schema_string += f" GENERATED ALWAYS AS ({item['generated_col']})"
+#     if 'is_nullable' in item and not item['is_nullable']:
+#       schema_string += " NOT NULL"
+#     if index < len(schema_dict) - 1:
+#       schema_string += ', '
 
-  return schema_string
+#   return schema_string
 
 def load_config_paths(base_repo_path: str, utils_json_path: str) -> list:
   """
